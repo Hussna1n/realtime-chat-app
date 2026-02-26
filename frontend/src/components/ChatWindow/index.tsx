@@ -1,114 +1,134 @@
-import { useState, useEffect, useRef } from 'react';
-import { Send, Paperclip, Smile, Phone, Video, MoreVertical } from 'lucide-react';
-import { Socket } from 'socket.io-client';
+import { useEffect, useRef, useState } from 'react';
+import { Send, Image, Check, CheckCheck } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+import { useSocket } from '../../hooks/useSocket';
+import { useAppSelector } from '../../store/hooks';
 
 interface Message {
-  _id: string; content: string; sender: { _id: string; username: string; avatar: string };
-  messageType: string; createdAt: string; readBy: string[];
+  _id: string;
+  sender: { _id: string; username: string; avatar?: string };
+  content: string;
+  type: 'text' | 'image';
+  readBy: string[];
+  createdAt: string;
 }
 
 interface Props {
-  conversationId: string; currentUserId: string;
-  recipient: { _id: string; username: string; fullName: string; avatar: string; isOnline: boolean };
-  socket: Socket;
+  conversationId: string;
+  participantName: string;
+  participantAvatar?: string;
 }
 
-export default function ChatWindow({ conversationId, currentUserId, recipient, socket }: Props) {
+export default function ChatWindow({ conversationId, participantName, participantAvatar }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const typingTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const currentUser = useAppSelector(s => s.auth.user);
+  const socket = useSocket();
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const typingTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
-    socket.emit('join_conversation', conversationId);
-    socket.on('new_message', (msg: Message) => setMessages(prev => [...prev, msg]));
-    socket.on('user_typing', ({ userId }: { userId: string }) => {
-      if (userId !== currentUserId) setIsTyping(true);
+    if (!socket) return;
+    socket.emit('conversation:join', conversationId);
+
+    socket.on('message:new', (msg: Message) => {
+      setMessages(prev => [...prev, msg]);
     });
-    socket.on('user_stopped_typing', () => setIsTyping(false));
-    return () => { socket.off('new_message'); socket.off('user_typing'); socket.off('user_stopped_typing'); };
-  }, [conversationId, socket, currentUserId]);
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+    socket.on('typing:start', (data: { userId: string }) => {
+      if (data.userId !== currentUser?._id) setIsTyping(true);
+    });
 
-  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInput(e.target.value);
-    socket.emit('typing_start', { conversationId });
-    clearTimeout(typingTimeout.current);
-    typingTimeout.current = setTimeout(() => socket.emit('typing_stop', { conversationId }), 1000);
+    socket.on('typing:stop', (data: { userId: string }) => {
+      if (data.userId !== currentUser?._id) setIsTyping(false);
+    });
+
+    return () => {
+      socket.off('message:new');
+      socket.off('typing:start');
+      socket.off('typing:stop');
+    };
+  }, [socket, conversationId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleTyping = () => {
+    socket?.emit('typing:start', conversationId);
+    clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => {
+      socket?.emit('typing:stop', conversationId);
+    }, 1500);
   };
 
-  const sendMessage = () => {
-    if (!input.trim()) return;
-    socket.emit('send_message', { conversationId, content: input, messageType: 'text' });
+  const sendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || !socket) return;
+    socket.emit('message:send', { conversationId, content: input });
     setInput('');
+    socket.emit('typing:stop', conversationId);
   };
 
   return (
     <div className="flex flex-col h-full bg-white">
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-white shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <img src={recipient.avatar || `https://ui-avatars.com/api/?name=${recipient.fullName}`}
-              className="w-10 h-10 rounded-full" alt="" />
-            {recipient.isOnline && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white" />}
-          </div>
-          <div>
-            <p className="font-semibold text-sm">{recipient.fullName}</p>
-            <p className="text-xs text-gray-500">{recipient.isOnline ? 'Online' : 'Offline'}</p>
-          </div>
-        </div>
-        <div className="flex gap-3 text-gray-500">
-          <button className="hover:text-blue-600"><Phone className="w-5 h-5" /></button>
-          <button className="hover:text-blue-600"><Video className="w-5 h-5" /></button>
-          <button className="hover:text-gray-700"><MoreVertical className="w-5 h-5" /></button>
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-white shadow-sm">
+        <img src={participantAvatar || `https://ui-avatars.com/api/?name=${participantName}`}
+          className="w-9 h-9 rounded-full" alt={participantName} />
+        <div>
+          <p className="font-semibold text-gray-900 text-sm">{participantName}</p>
+          {isTyping && <p className="text-xs text-green-500">typing...</p>}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2 bg-gray-50">
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map(msg => {
-          const isMine = msg.sender._id === currentUserId;
+          const isMe = msg.sender._id === currentUser?._id;
           return (
-            <div key={msg._id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
-              {!isMine && (
-                <img src={msg.sender.avatar} className="w-7 h-7 rounded-full mr-2 self-end" alt="" />
-              )}
-              <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-2xl text-sm ${
-                isMine ? 'bg-blue-600 text-white rounded-br-sm' : 'bg-white text-gray-800 shadow-sm rounded-bl-sm'
-              }`}>
-                {msg.content}
-                <div className={`text-xs mt-1 ${isMine ? 'text-blue-100' : 'text-gray-400'}`}>
-                  {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  {isMine && msg.readBy.length > 1 && ' ✓✓'}
+            <div key={msg._id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[70%] ${isMe ? 'items-end' : 'items-start'} flex flex-col`}>
+                {msg.type === 'image'
+                  ? <img src={msg.content} alt="sent" className="rounded-xl max-w-xs" />
+                  : (
+                    <div className={`px-4 py-2.5 rounded-2xl text-sm ${isMe
+                      ? 'bg-blue-500 text-white rounded-tr-sm'
+                      : 'bg-gray-100 text-gray-800 rounded-tl-sm'}`}>
+                      {msg.content}
+                    </div>
+                  )
+                }
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="text-[10px] text-gray-400">
+                    {formatDistanceToNow(new Date(msg.createdAt), { addSuffix: true })}
+                  </span>
+                  {isMe && (
+                    msg.readBy.length > 1
+                      ? <CheckCheck size={12} className="text-blue-400" />
+                      : <Check size={12} className="text-gray-400" />
+                  )}
                 </div>
               </div>
             </div>
           );
         })}
-        {isTyping && (
-          <div className="flex items-center gap-1 text-gray-500 text-xs">
-            <span className="flex gap-1">
-              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-            </span>
-            {recipient.username} is typing...
-          </div>
-        )}
-        <div ref={messagesEndRef} />
+        <div ref={bottomRef} />
       </div>
-      <div className="px-4 py-3 border-t bg-white">
-        <div className="flex items-center gap-2 bg-gray-100 rounded-full px-4 py-2">
-          <button className="text-gray-400 hover:text-gray-600"><Smile className="w-5 h-5" /></button>
-          <input value={input} onChange={handleInput}
-            onKeyDown={e => e.key === 'Enter' && sendMessage()}
-            className="flex-1 bg-transparent text-sm outline-none" placeholder="Type a message..." />
-          <button className="text-gray-400 hover:text-gray-600"><Paperclip className="w-5 h-5" /></button>
-          <button onClick={sendMessage} className="text-blue-600 hover:text-blue-700 ml-1">
-            <Send className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
+
+      {/* Input */}
+      <form onSubmit={sendMessage} className="flex gap-2 p-4 border-t border-gray-100">
+        <button type="button" className="text-gray-400 hover:text-blue-500">
+          <Image size={20} />
+        </button>
+        <input value={input} onChange={e => { setInput(e.target.value); handleTyping(); }}
+          placeholder="Type a message..." className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-sm outline-none" />
+        <button type="submit" disabled={!input.trim()}
+          className="bg-blue-500 text-white rounded-full p-2 hover:bg-blue-600 disabled:opacity-40">
+          <Send size={18} />
+        </button>
+      </form>
     </div>
   );
 }
