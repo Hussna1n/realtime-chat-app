@@ -4,21 +4,19 @@ export interface IMessage extends Document {
   conversation: mongoose.Types.ObjectId;
   sender: mongoose.Types.ObjectId;
   content: string;
-  messageType: 'text' | 'image' | 'file' | 'audio';
-  fileUrl?: string;
+  type: 'text' | 'image' | 'file';
   readBy: mongoose.Types.ObjectId[];
-  replyTo?: mongoose.Types.ObjectId;
   createdAt: Date;
 }
 
 const MessageSchema = new Schema<IMessage>({
-  conversation: { type: Schema.Types.ObjectId, ref: 'Conversation', required: true },
+  conversation: { type: Schema.Types.ObjectId, ref: 'Conversation', required: true, index: true },
   sender: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-  content: { type: String, required: true },
-  messageType: { type: String, enum: ['text', 'image', 'file', 'audio'], default: 'text' },
-  fileUrl: String,
+  content: { type: String, required: true, maxlength: 5000 },
+  type: { type: String, enum: ['text', 'image', 'file'], default: 'text' },
   readBy: [{ type: Schema.Types.ObjectId, ref: 'User' }],
-  replyTo: { type: Schema.Types.ObjectId, ref: 'Message' },
 }, { timestamps: true });
+
+MessageSchema.index({ conversation: 1, createdAt: -1 });
 
 export default mongoose.model<IMessage>('Message', MessageSchema);
